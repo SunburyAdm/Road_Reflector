@@ -1,0 +1,4 @@
+
+Commands
+
+python plot_sensors_live.py --port COM6 --baud 115200
