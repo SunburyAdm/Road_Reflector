@@ -1,0 +1,27 @@
+Device:
+RAK4631 + ADXL362 + SHT31 + temp sensor + water sensor + piezo + LiFePO₄ + solar
+
+Connectivity:
+LoRaWAN US915
+Outdoor gateway RAK7289V2 o Milesight UG67
+
+Network Server:
+ChirpStack
+
+Message Layer:
+MQTT
+
+Backend:
+FastAPI
+
+Database:
+PostgreSQL + InfluxDB
+
+Dashboard:
+Grafana + custom web dashboard
+
+3D:
+Three.js
+
+Security:
+LoRaWAN OTAA + API keys + JWT + HTTPS
