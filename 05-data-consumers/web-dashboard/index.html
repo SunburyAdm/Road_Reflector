@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Road Reflector — Alpha Demo · East Liberty</title>
+  <link rel="stylesheet" href="css/dashboard.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo-dot"></span>
+      <div>
+        <h1>Smart Road Reflector</h1>
+        <p>Alpha Demonstration Platform · East Liberty Office Campus</p>
+      </div>
+    </div>
+    <div class="status-cluster">
+      <div class="pill" id="simPill"><span class="dot"></span><span id="simText">connecting…</span></div>
+      <div class="pill" id="wsPill"><span class="dot"></span><span id="wsText">WebSocket</span></div>
+      <div class="pill sim-tag">SIMULATED DATA</div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- LEFT: 3D + KPIs -->
+    <section class="col col-main">
+      <div class="kpis" id="kpis">
+        <div class="kpi"><span class="kpi-val" id="kpiSensors">–</span><span class="kpi-lbl">Sensors online</span></div>
+        <div class="kpi"><span class="kpi-val" id="kpiAlerts">–</span><span class="kpi-lbl">Active alerts</span></div>
+        <div class="kpi"><span class="kpi-val" id="kpiTraffic">–</span><span class="kpi-lbl">Vehicle events (2m)</span></div>
+        <div class="kpi"><span class="kpi-val" id="kpiTemp">–</span><span class="kpi-lbl">Avg pavement °C</span></div>
+      </div>
+      <div class="panel grow">
+        <div class="panel-head"><h2>3D Site Visualization</h2><span class="hint">drag to orbit · scroll to zoom</span></div>
+        <div id="scene" class="scene"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Live Event Feed</h2><button id="clearFeed" class="link">clear</button></div>
+        <ul id="feed" class="feed"></ul>
+      </div>
+    </section>
+
+    <!-- RIGHT: panels -->
+    <section class="col col-side">
+      <div class="panel">
+        <div class="panel-head"><h2>Smart Reflector Nodes</h2></div>
+        <ul id="sensorList" class="sensor-list"></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Road Condition</h2></div>
+        <div id="roadCondition" class="road-grid"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Active Alerts</h2><span class="badge" id="alertBadge">0</span></div>
+        <ul id="alertList" class="alert-list"></ul>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Vehicle Events</h2></div>
+        <table class="evt-table">
+          <thead><tr><th>Time</th><th>Type</th><th>Class</th><th>km/h</th><th>Seg</th></tr></thead>
+          <tbody id="vehicleTable"></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>API / Ingestion Log</h2></div>
+        <ul id="apiLog" class="api-log"></ul>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="js/dashboard.js"></script>
+</body>
+</html>

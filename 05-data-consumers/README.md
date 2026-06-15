@@ -7,9 +7,19 @@ Visualization and consumer-facing layers.
 ```
 05-data-consumers/
 ├── web-dashboard/      Custom technical web dashboard
+│   ├── index.html      Dashboard shell (KPIs, panels, 3D mount)
+│   ├── css/dashboard.css
+│   └── js/dashboard.js Hydration + live WebSocket controller
 ├── 3d-visualization/   Three.js real-time 3D road visualization
+│   └── js/scene.js     SiteScene: builds site model, animates vehicles/pulses
 └── grafana/            Grafana dashboards
 ```
+
+> The dashboard and 3D scene are served by the FastAPI backend as static files at
+> `http://localhost:8000/` (the dashboard imports `scene.js` from the sibling
+> `3d-visualization/` folder). See [`../03-cloud-platform/DEMO.md`](../03-cloud-platform/DEMO.md)
+> for the full run flow.
+
 
 ## Technical Dashboard
 

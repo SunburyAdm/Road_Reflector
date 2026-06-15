@@ -1,0 +1,123 @@
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --panel-2: #1c2530;
+  --border: #283042;
+  --text: #e6edf3;
+  --muted: #8893a5;
+  --accent: #3fa9f5;
+  --ok: #35d07f;
+  --warn: #ffb020;
+  --crit: #ff4d4f;
+  --info: #3fa9f5;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", Roboto, system-ui, sans-serif;
+  font-size: 14px;
+}
+
+/* Topbar */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px; background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo-dot {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #7fd1ff, var(--accent));
+  box-shadow: 0 0 12px var(--accent);
+}
+.brand h1 { margin: 0; font-size: 17px; letter-spacing: .3px; }
+.brand p { margin: 2px 0 0; font-size: 11px; color: var(--muted); }
+.status-cluster { display: flex; align-items: center; gap: 10px; }
+.pill {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  padding: 6px 11px; border-radius: 20px; font-size: 12px;
+}
+.pill .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.pill.live .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.pill.stale .dot { background: var(--warn); }
+.pill.down .dot { background: var(--crit); }
+.sim-tag { color: var(--warn); border-color: var(--warn); font-weight: 600; letter-spacing: .5px; }
+
+/* Layout */
+.layout { display: grid; grid-template-columns: 1.6fr 1fr; gap: 14px; padding: 14px; height: calc(100vh - 60px); }
+.col { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.col-side { overflow-y: auto; }
+
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.panel.grow { flex: 1; display: flex; flex-direction: column; min-height: 260px; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.panel-head h2 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.hint { font-size: 11px; color: var(--muted); }
+.link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; }
+.badge { background: var(--crit); color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 11px; }
+
+/* KPIs */
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.kpi { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; text-align: center; }
+.kpi-val { display: block; font-size: 26px; font-weight: 700; }
+.kpi-lbl { font-size: 11px; color: var(--muted); }
+
+/* Scene */
+.scene { flex: 1; min-height: 240px; border-radius: 8px; overflow: hidden; background: #0d1117; }
+
+/* Feed */
+.feed { list-style: none; margin: 0; padding: 0; max-height: 150px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 12px; }
+.feed li { padding: 4px 6px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+.feed .t { color: var(--muted); }
+.tag { padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.tag.telemetry { background: #1d3b53; color: #7fd1ff; }
+.tag.vehicle_event { background: #1d3f30; color: #7be8ad; }
+.tag.alert { background: #4a2424; color: #ff9a9a; }
+.tag.simulation_status { background: #3a3320; color: #ffd479; }
+
+/* Sensor list */
+.sensor-list { list-style: none; margin: 0; padding: 0; }
+.sensor-list li { display: flex; align-items: center; gap: 10px; padding: 7px 4px; border-bottom: 1px solid var(--border); }
+.s-dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+.s-dot.ok { background: var(--ok); }
+.s-dot.warning { background: var(--warn); }
+.s-dot.critical { background: var(--crit); }
+.s-dot.offline { background: var(--muted); }
+.s-id { font-weight: 600; }
+.s-meta { color: var(--muted); font-size: 11px; margin-left: auto; text-align: right; }
+
+/* Road condition */
+.road-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.road-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.road-card .rc-seg { font-size: 11px; color: var(--muted); }
+.road-card .rc-state { font-weight: 700; text-transform: capitalize; }
+.road-card.normal .rc-state { color: var(--ok); }
+.road-card.surface_water .rc-state { color: var(--info); }
+.road-card.ice_risk .rc-state { color: var(--crit); }
+.road-card.pavement_attention .rc-state { color: var(--warn); }
+
+/* Alerts */
+.alert-list { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; }
+.alert-list li { padding: 7px 8px; border-left: 3px solid var(--muted); background: var(--panel-2); border-radius: 6px; margin-bottom: 6px; }
+.alert-list li.warning { border-color: var(--warn); }
+.alert-list li.critical { border-color: var(--crit); }
+.alert-list li.info { border-color: var(--info); }
+.a-type { font-weight: 700; text-transform: capitalize; }
+.a-msg { color: var(--muted); font-size: 12px; }
+
+/* Vehicle table */
+.evt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.evt-table th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px; border-bottom: 1px solid var(--border); }
+.evt-table td { padding: 4px; border-bottom: 1px solid var(--border); }
+.evt-table tbody { display: block; max-height: 180px; overflow-y: auto; }
+.evt-table thead, .evt-table tbody tr { display: table; width: 100%; table-layout: fixed; }
+
+/* API log */
+.api-log { list-style: none; margin: 0; padding: 0; max-height: 130px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+.api-log li { padding: 2px 4px; }
+.method { color: var(--ok); font-weight: 700; }
