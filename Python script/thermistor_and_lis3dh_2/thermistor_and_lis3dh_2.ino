@@ -6,39 +6,55 @@
 #include <Adafruit_Sensor.h>
 
 // -------------------- Pins --------------------
-#define NTC_ADC_PIN     3
-#define NTC_POWER_PIN   2
+#define NTC_ADC_PIN      3
+#define NTC_POWER_PIN    2
 
-#define I2C_SDA_PIN     0
-#define I2C_SCL_PIN     1
+#define I2C_SDA_PIN      0
+#define I2C_SCL_PIN      1
+
+#define PIEZO_ADC_PIN    4
 
 // -------------------- NTC Parameters --------------------
 const float SERIES_RESISTOR = 100000.0;
 const float NOMINAL_RESISTANCE = 100000.0;
 const float NOMINAL_TEMPERATURE = 25.0;
 const float BETA_COEFFICIENT = 3950.0;
+
+// Use your measured voltage from the GPIO power pin.
 const float NTC_SUPPLY_VOLTAGE = 3.13;
 
 // -------------------- Timing --------------------
-const uint32_t SENSOR_INTERVAL_MS = 5;      // 5 ms = 200 Hz serial output target
-const uint32_t NTC_INTERVAL_MS = 1000;      // NTC every 1 second
-const uint32_t PRINT_INTERVAL_MS = 10;      // Print at 100 Hz
+const uint32_t SENSOR_INTERVAL_MS = 5;       // 200 Hz target
+const uint32_t PRINT_INTERVAL_MS  = 20;      // 50 Hz serial output
+const uint32_t NTC_INTERVAL_MS    = 1000;    // NTC every 1 second
 
 uint32_t lastSensorReadMs = 0;
-uint32_t lastNTCReadMs = 0;
 uint32_t lastPrintMs = 0;
+uint32_t lastNTCReadMs = 0;
+uint32_t lastPiezoPeakResetMs = 0;
 
 float lastTemperatureC = NAN;
 
+// -------------------- LIS3DH --------------------
 Adafruit_LIS3DH lis = Adafruit_LIS3DH();
 
-// Low-pass gravity estimate
+// Gravity / vibration processing
 float gravityMagEstimate = 9.81;
 float peakDynamic = 0.0;
-
-// Larger alpha = faster gravity tracking.
-// Smaller alpha = better vibration isolation.
 const float GRAVITY_ALPHA = 0.01;
+
+// -------------------- Piezo Processing --------------------
+float piezoBaselineMv = 0.0;
+float piezoSignalMv = 0.0;
+float piezoPeakMv = 0.0;
+
+// Adjust after testing.
+// Start low, then tune based on real noise.
+const float PIEZO_EVENT_THRESHOLD_MV = 80.0;
+
+// Smaller alpha = slower baseline tracking.
+// This helps remove slow drift and keep fast impacts.
+const float PIEZO_BASELINE_ALPHA = 0.02;
 
 float calculateNTCTemperatureC(float resistance)
 {
@@ -93,11 +109,24 @@ void setupLIS3DH()
     }
   }
 
-  // More sensitive for footsteps / small vibrations
+  // Use ±2g for small vibration tests.
+  // Later, for vehicle impact testing, try ±8g or ±16g.
   lis.setRange(LIS3DH_RANGE_2_G);
 
-  // Fast enough for footstep and impact testing
+  // Fast enough for vibration testing.
   lis.setDataRate(LIS3DH_DATARATE_400_HZ);
+}
+
+float readPiezoMv()
+{
+  const int samples = 4;
+  uint32_t mvSum = 0;
+
+  for (int i = 0; i < samples; i++) {
+    mvSum += analogReadMilliVolts(PIEZO_ADC_PIN);
+  }
+
+  return mvSum / (float)samples;
 }
 
 void setup()
@@ -108,13 +137,20 @@ void setup()
   delay(1000);
 
   analogReadResolution(12);
+
   analogSetPinAttenuation(NTC_ADC_PIN, ADC_11db);
+  analogSetPinAttenuation(PIEZO_ADC_PIN, ADC_11db);
 
   pinMode(NTC_POWER_PIN, INPUT);
+  pinMode(PIEZO_ADC_PIN, INPUT);
 
   setupLIS3DH();
 
-  Serial.println("time_ms,temp_c,ax,ay,az,mag,dynamic_mag,peak_dynamic");
+  // Initialize piezo baseline
+  delay(100);
+  piezoBaselineMv = readPiezoMv();
+
+  Serial.println("time_ms,temp_c,ax,ay,az,mag,dynamic_mag,peak_dynamic,piezo_mv,piezo_signal_mv,piezo_peak_mv,piezo_event");
 }
 
 void loop()
@@ -129,6 +165,7 @@ void loop()
   if (nowMs - lastSensorReadMs >= SENSOR_INTERVAL_MS) {
     lastSensorReadMs = nowMs;
 
+    // -------------------- LIS3DH Read --------------------
     sensors_event_t event;
     lis.getEvent(&event);
 
@@ -138,18 +175,32 @@ void loop()
 
     float mag = sqrt((ax * ax) + (ay * ay) + (az * az));
 
-    // Estimate slow gravity component
     gravityMagEstimate =
       (1.0 - GRAVITY_ALPHA) * gravityMagEstimate +
       GRAVITY_ALPHA * mag;
 
-    // Dynamic vibration component
     float dynamicMag = fabs(mag - gravityMagEstimate);
 
     if (dynamicMag > peakDynamic) {
       peakDynamic = dynamicMag;
     }
 
+    // -------------------- Piezo Read --------------------
+    float piezoMv = readPiezoMv();
+
+    piezoBaselineMv =
+      (1.0 - PIEZO_BASELINE_ALPHA) * piezoBaselineMv +
+      PIEZO_BASELINE_ALPHA * piezoMv;
+
+    piezoSignalMv = fabs(piezoMv - piezoBaselineMv);
+
+    if (piezoSignalMv > piezoPeakMv) {
+      piezoPeakMv = piezoSignalMv;
+    }
+
+    bool piezoEvent = piezoSignalMv >= PIEZO_EVENT_THRESHOLD_MV;
+
+    // -------------------- Print CSV --------------------
     if (nowMs - lastPrintMs >= PRINT_INTERVAL_MS) {
       lastPrintMs = nowMs;
 
@@ -173,14 +224,22 @@ void loop()
       Serial.print(",");
       Serial.print(dynamicMag, 4);
       Serial.print(",");
-      Serial.println(peakDynamic, 4);
+      Serial.print(peakDynamic, 4);
+      Serial.print(",");
+      Serial.print(piezoMv, 2);
+      Serial.print(",");
+      Serial.print(piezoSignalMv, 2);
+      Serial.print(",");
+      Serial.print(piezoPeakMv, 2);
+      Serial.print(",");
+      Serial.println(piezoEvent ? 1 : 0);
     }
 
-    // Reset peak every 1 second approximately
-    static uint32_t lastPeakResetMs = 0;
-    if (nowMs - lastPeakResetMs >= 1000) {
-      lastPeakResetMs = nowMs;
+    // Reset peaks every second
+    if (nowMs - lastPiezoPeakResetMs >= 1000) {
+      lastPiezoPeakResetMs = nowMs;
       peakDynamic = 0.0;
+      piezoPeakMv = 0.0;
     }
   }
 }
