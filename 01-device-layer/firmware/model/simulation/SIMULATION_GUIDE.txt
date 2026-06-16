@@ -82,7 +82,7 @@ Equation of motion:
 
 Where:
     z       = vertical displacement of the asphalt surface [m]
-    z̈      = vertical acceleration of the surface [m/s²]
+    z̈       = vertical acceleration of the surface [m/s²]
     F(t)    = tire force applied to the surface at time t [N]
     k_eq    = series combination of asphalt and subgrade stiffness [N/m]
     c_eq    = equivalent viscous damping [N·s/m]
