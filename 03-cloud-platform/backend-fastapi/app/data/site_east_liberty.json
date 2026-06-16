@@ -1,0 +1,195 @@
+{
+  "schema_version": "1.0",
+  "generated_by": "Smart Road Reflector Alpha Demonstration Platform",
+  "data_mode": "simulated",
+  "site": {
+    "site_id": "SITE-EAST-LIBERTY",
+    "name": "Astemo Americas, Inc. — East Liberty Office",
+    "description": "Office-campus demonstration area with a long access driveway from OH-287, a perimeter parking lot, and a diagonal office building. Used as the controlled Alpha demo environment for Smart Road Reflector telemetry, vehicle events, and road-condition intelligence.",
+    "address": "25790 OH-287, East Liberty, OH 43319",
+    "geo_reference": {
+      "approx_lat": 40.31806,
+      "approx_lon": -83.55694,
+      "note": "Approximate centroid only. Local coordinate system below is authoritative for the demo."
+    },
+    "coordinate_system": {
+      "units": "meters",
+      "origin": "Driveway entrance apron at OH-287 (south end of access road).",
+      "x_axis": "Along the main driveway, increasing northward toward the building/parking lot.",
+      "y_axis": "Across the parking lot (negative = south/entry side, positive = north/exit side).",
+      "z_axis": "Elevation above local grade (used for drainage low-point and 3D rendering).",
+      "bounds_m": { "x_min": -10, "x_max": 120, "y_min": -40, "y_max": 40 }
+    },
+    "assumptions": {
+      "driveway_length_m": 90,
+      "driveway_width_m": 6.0,
+      "parking_lot_width_m": 60,
+      "parking_lot_depth_m": 45,
+      "sensor_spacing_driveway_m": 30,
+      "vehicle_speed_range_kmh": [5, 35],
+      "typical_parking_speed_kmh": [5, 15],
+      "typical_driveway_speed_kmh": [15, 35],
+      "note": "Scale approximated from satellite imagery; not survey-grade. Tune in this file only — no code changes required."
+    }
+  },
+  "building": {
+    "building_id": "BLDG-MAIN",
+    "name": "East Liberty Office",
+    "footprint_m": { "x": 80, "y": -10, "width_x": 30, "depth_y": 22, "rotation_deg": 18 },
+    "height_m": 7.5
+  },
+  "road_segments": [
+    {
+      "segment_id": "SEG-ENTRY-287",
+      "name": "OH-287 Entry/Exit Apron",
+      "type": "entry_exit",
+      "polyline_m": [ [0, 0], [8, 0] ],
+      "width_m": 7.0,
+      "speed_limit_kmh": 15
+    },
+    {
+      "segment_id": "SEG-DRIVEWAY-MAIN",
+      "name": "Main Access Driveway",
+      "type": "driveway",
+      "polyline_m": [ [8, 0], [45, 0], [72, 0] ],
+      "width_m": 6.0,
+      "speed_limit_kmh": 25
+    },
+    {
+      "segment_id": "SEG-PARKING-LOOP",
+      "name": "Parking Lot Circulation Loop",
+      "type": "parking_loop",
+      "polyline_m": [ [72, 0], [78, -10], [95, -20], [105, 0], [95, 20], [78, 10], [72, 0] ],
+      "width_m": 6.0,
+      "speed_limit_kmh": 15
+    }
+  ],
+  "parking_zones": [
+    {
+      "parking_zone_id": "PARK-NORTH",
+      "name": "North Parking Rows",
+      "anchor_m": { "x": 90, "y": 18 },
+      "rows": 2,
+      "spaces_per_row": 16,
+      "capacity": 32,
+      "space_size_m": { "width": 2.6, "depth": 5.2 },
+      "orientation_deg": 18
+    },
+    {
+      "parking_zone_id": "PARK-SOUTH",
+      "name": "South Parking Rows",
+      "anchor_m": { "x": 90, "y": -18 },
+      "rows": 2,
+      "spaces_per_row": 14,
+      "capacity": 28,
+      "space_size_m": { "width": 2.6, "depth": 5.2 },
+      "orientation_deg": 18
+    }
+  ],
+  "pedestrian_zones": [
+    {
+      "pedestrian_zone_id": "PED-CROSS-ENTRANCE",
+      "name": "Building Entrance Crosswalk",
+      "polyline_m": [ [78, -4], [78, 8] ],
+      "width_m": 3.0
+    }
+  ],
+  "sensors": [
+    {
+      "device_id": "SRR-OFFICE-001",
+      "role": "speed_direction",
+      "segment_id": "SEG-DRIVEWAY-MAIN",
+      "position_m": { "x": 15, "y": 0, "z": 0 },
+      "group": "driveway_speed_array",
+      "notes": "Driveway near entry — first node of the speed/direction estimation array."
+    },
+    {
+      "device_id": "SRR-OFFICE-002",
+      "role": "speed_direction",
+      "segment_id": "SEG-DRIVEWAY-MAIN",
+      "position_m": { "x": 45, "y": 0, "z": 0 },
+      "group": "driveway_speed_array",
+      "notes": "Driveway midpoint — second node of the speed/direction array."
+    },
+    {
+      "device_id": "SRR-OFFICE-003",
+      "role": "speed_direction",
+      "segment_id": "SEG-DRIVEWAY-MAIN",
+      "position_m": { "x": 72, "y": 0, "z": 0 },
+      "group": "driveway_speed_array",
+      "notes": "Driveway near parking entrance — third node; closes the speed/direction baseline."
+    },
+    {
+      "device_id": "SRR-OFFICE-004",
+      "role": "vehicle_count",
+      "segment_id": "SEG-PARKING-LOOP",
+      "position_m": { "x": 78, "y": -10, "z": 0 },
+      "group": "parking_gate",
+      "notes": "Parking lot entry lane — vehicle counting / turn-in detection."
+    },
+    {
+      "device_id": "SRR-OFFICE-005",
+      "role": "vehicle_count",
+      "segment_id": "SEG-PARKING-LOOP",
+      "position_m": { "x": 78, "y": 10, "z": 0 },
+      "group": "parking_gate",
+      "notes": "Parking lot exit lane — vehicle counting / leaving detection."
+    },
+    {
+      "device_id": "SRR-OFFICE-006",
+      "role": "surface_water",
+      "segment_id": "SEG-DRIVEWAY-MAIN",
+      "position_m": { "x": 60, "y": -12, "z": -0.25 },
+      "group": "drainage",
+      "notes": "Drainage-prone low area — surface water / ice-risk monitoring."
+    },
+    {
+      "device_id": "SRR-OFFICE-007",
+      "role": "parking_condition",
+      "segment_id": "SEG-PARKING-LOOP",
+      "position_m": { "x": 95, "y": 20, "z": 0 },
+      "group": "parking_field",
+      "notes": "North parking row — pavement and occupancy-adjacent vibration."
+    },
+    {
+      "device_id": "SRR-OFFICE-008",
+      "role": "parking_condition",
+      "segment_id": "SEG-PARKING-LOOP",
+      "position_m": { "x": 95, "y": -20, "z": 0 },
+      "group": "parking_field",
+      "notes": "South parking row — pavement and occupancy-adjacent vibration."
+    }
+  ],
+  "gateways": [
+    {
+      "gateway_id": "GW-EAST-LIBERTY-01",
+      "name": "Rooftop LoRaWAN Gateway",
+      "position_m": { "x": 88, "y": 0, "z": 8 },
+      "model": "RAK7289V2",
+      "note": "Future LoRaWAN/ChirpStack uplink point. Not used by the simulation feeder."
+    }
+  ],
+  "vehicle_paths": [
+    {
+      "path_id": "PATH-ENTER-PARK",
+      "name": "Enter site and park (north row)",
+      "waypoints_m": [ [-6, 0], [0, 0], [15, 0], [45, 0], [72, 0], [78, 10], [90, 18] ],
+      "related_sensor_ids": ["SRR-OFFICE-001", "SRR-OFFICE-002", "SRR-OFFICE-003", "SRR-OFFICE-005", "SRR-OFFICE-007"],
+      "terminal_event": "vehicle_parking"
+    },
+    {
+      "path_id": "PATH-LEAVE-PARK",
+      "name": "Leave parking and exit site",
+      "waypoints_m": [ [90, -18], [78, -10], [72, 0], [45, 0], [15, 0], [0, 0], [-6, 0] ],
+      "related_sensor_ids": ["SRR-OFFICE-004", "SRR-OFFICE-003", "SRR-OFFICE-002", "SRR-OFFICE-001"],
+      "terminal_event": "vehicle_exiting_site"
+    },
+    {
+      "path_id": "PATH-PASS-DRIVEWAY",
+      "name": "Pass along driveway (delivery loop)",
+      "waypoints_m": [ [-6, 0], [0, 0], [15, 0], [45, 0], [60, -12], [72, 0], [105, 0] ],
+      "related_sensor_ids": ["SRR-OFFICE-001", "SRR-OFFICE-002", "SRR-OFFICE-006", "SRR-OFFICE-003"],
+      "terminal_event": "vehicle_passing_driveway"
+    }
+  ]
+}

@@ -3,9 +3,48 @@ import math
 import time
 from collections import deque
 
+import numpy as np
 import serial
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+
+
+def compute_fft(t_list, y_list, min_samples=32):
+    """Single-sided amplitude spectrum of a (possibly non-uniform) signal.
+
+    The serial samples are not perfectly evenly spaced, so the signal is first
+    resampled onto a uniform time grid, DC-removed, and Hann-windowed before the
+    real FFT. Returns (freqs_hz, amplitude) or (None, None) if there is not
+    enough data yet.
+    """
+    t = np.asarray(t_list, dtype=float)
+    y = np.asarray(y_list, dtype=float)
+
+    mask = np.isfinite(t) & np.isfinite(y)
+    t, y = t[mask], y[mask]
+    n = t.size
+    if n < min_samples:
+        return None, None
+
+    span = t[-1] - t[0]
+    if span <= 0:
+        return None, None
+
+    # Uniform resample over the captured span.
+    t_uniform = np.linspace(t[0], t[-1], n)
+    y_uniform = np.interp(t_uniform, t, y)
+    dt = span / (n - 1)
+    fs = 1.0 / dt
+
+    y_uniform = y_uniform - np.mean(y_uniform)
+    window = np.hanning(n)
+    coherent_gain = np.sum(window)
+    if coherent_gain <= 0:
+        return None, None
+
+    spectrum = np.abs(np.fft.rfft(y_uniform * window)) * (2.0 / coherent_gain)
+    freqs = np.fft.rfftfreq(n, d=1.0 / fs)
+    return freqs, spectrum
 
 
 def parse_line(line: str):
@@ -95,13 +134,19 @@ def main():
 
     start_ms = None
 
-    fig, axes = plt.subplots(5, 1, figsize=(12, 10), sharex=True)
+    # Left column: time-domain signals (shared time axis).
+    # Right column: FFT (frequency-domain) of vibration signals.
+    fig = plt.figure(figsize=(15, 10))
+    gs = fig.add_gridspec(5, 2, width_ratios=[2, 1])
 
-    ax_temp_plot = axes[0]
-    ax_xyz_plot = axes[1]
-    ax_dynamic_plot = axes[2]
-    ax_piezo_raw_plot = axes[3]
-    ax_piezo_signal_plot = axes[4]
+    ax_temp_plot = fig.add_subplot(gs[0, 0])
+    ax_xyz_plot = fig.add_subplot(gs[1, 0], sharex=ax_temp_plot)
+    ax_dynamic_plot = fig.add_subplot(gs[2, 0], sharex=ax_temp_plot)
+    ax_piezo_raw_plot = fig.add_subplot(gs[3, 0], sharex=ax_temp_plot)
+    ax_piezo_signal_plot = fig.add_subplot(gs[4, 0], sharex=ax_temp_plot)
+
+    ax_fft_accel = fig.add_subplot(gs[0:3, 1])
+    ax_fft_piezo = fig.add_subplot(gs[3:5, 1])
 
     line_temp, = ax_temp_plot.plot([], [], label="Temperature C")
 
@@ -117,6 +162,9 @@ def main():
     line_piezo_signal, = ax_piezo_signal_plot.plot([], [], label="Piezo signal mV")
     line_piezo_peak, = ax_piezo_signal_plot.plot([], [], label="Piezo peak mV")
     line_piezo_event, = ax_piezo_signal_plot.plot([], [], label="Piezo event x100")
+
+    line_fft_accel, = ax_fft_accel.plot([], [], color="tab:red", label="Dynamic accel FFT")
+    line_fft_piezo, = ax_fft_piezo.plot([], [], color="tab:purple", label="Piezo signal FFT")
 
     ax_temp_plot.set_ylabel("Temp [C]")
     ax_temp_plot.legend(loc="upper right")
@@ -139,7 +187,18 @@ def main():
     ax_piezo_signal_plot.legend(loc="upper right")
     ax_piezo_signal_plot.grid(True)
 
-    fig.suptitle("ESP32-C3 Smart Reflector Sensors: NTC + LIS3DH + Piezo")
+    ax_fft_accel.set_title("FFT - Dynamic acceleration")
+    ax_fft_accel.set_ylabel("Amplitude [m/s²]")
+    ax_fft_accel.legend(loc="upper right")
+    ax_fft_accel.grid(True)
+
+    ax_fft_piezo.set_title("FFT - Piezo signal")
+    ax_fft_piezo.set_xlabel("Frequency [Hz]")
+    ax_fft_piezo.set_ylabel("Amplitude [mV]")
+    ax_fft_piezo.legend(loc="upper right")
+    ax_fft_piezo.grid(True)
+
+    fig.suptitle("ESP32-C3 Smart Reflector Sensors: NTC + LIS3DH + Piezo + FFT")
 
     def update(_frame):
         nonlocal start_ms
@@ -204,6 +263,8 @@ def main():
                 line_piezo_signal,
                 line_piezo_peak,
                 line_piezo_event,
+                line_fft_accel,
+                line_fft_piezo,
             )
 
         current_t = t_data[-1]
@@ -251,6 +312,27 @@ def main():
             upper = max(piezo_values) + 50
             ax_piezo_signal_plot.set_ylim(0, max(200, upper))
 
+        # ---- FFT over the currently visible time window ----
+        t_arr = np.asarray(t_data)
+        in_window = t_arr >= min_t
+        if np.count_nonzero(in_window) >= 32:
+            tw = t_arr[in_window]
+            dyn_w = np.asarray(dyn_data)[in_window]
+            piezo_w = np.asarray(piezo_signal_data)[in_window]
+
+            f_a, s_a = compute_fft(tw, dyn_w)
+            if f_a is not None and f_a.size > 1:
+                # Skip the DC bin (index 0) for clearer scaling.
+                line_fft_accel.set_data(f_a[1:], s_a[1:])
+                ax_fft_accel.set_xlim(0, f_a[-1])
+                ax_fft_accel.set_ylim(0, max(float(s_a[1:].max()) * 1.15, 1e-4))
+
+            f_p, s_p = compute_fft(tw, piezo_w)
+            if f_p is not None and f_p.size > 1:
+                line_fft_piezo.set_data(f_p[1:], s_p[1:])
+                ax_fft_piezo.set_xlim(0, f_p[-1])
+                ax_fft_piezo.set_ylim(0, max(float(s_p[1:].max()) * 1.15, 1e-4))
+
         return (
             line_temp,
             line_x,
@@ -262,6 +344,8 @@ def main():
             line_piezo_signal,
             line_piezo_peak,
             line_piezo_event,
+            line_fft_accel,
+            line_fft_piezo,
         )
 
     animation = FuncAnimation(
