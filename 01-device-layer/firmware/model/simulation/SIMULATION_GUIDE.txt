@@ -1,0 +1,819 @@
+================================================================================
+  ASPHALT VIBRATION MODEL — SIMULATION GUIDE
+  Smart Road Reflector Project | Device Layer | Firmware Model
+================================================================================
+
+CONTENTS
+--------
+  1. Purpose and Scope
+  2. Physical Model
+     2.1 Asphalt Layer (SDOF System)
+     2.2 Temperature-Dependent Modulus
+     2.3 Equivalent Parameters
+     2.4 Vehicle Load and Tire Force
+     2.5 Sensor Array and Noise
+     2.6 Vehicle Speed Estimation (Cross-Correlation)
+     2.7 Event Detection (Windowed RMS)
+     2.8 Spectrogram (STFT)
+  3. Running the Simulation
+  4. GUI Controls Reference
+     4.1 Asphalt Section
+     4.2 Vehicle Section
+     4.3 Tire Load / Road Excitation Section
+     4.4 Sensor Array & Detection Section
+     4.5 Sensor / Simulation Section
+     4.6 Buttons
+  5. Plot Panels Reference
+     5.1 Top-Left  — Tire Load at S1
+     5.2 Top-Right — Asphalt Displacement at S1
+     5.3 Mid-Left  — Sensor Array Acceleration
+     5.4 Mid-Right — S1 Clean vs. Noisy Signal
+     5.5 Bot-Left  — Spectrogram (STFT)
+     5.6 Bot-Right — Event Detection (Windowed RMS)
+  6. Results Panel
+  7. Export Functions
+     7.1 Save CSV
+     7.2 Export JSON Dataset
+  8. Typical Usage Workflows
+  9. Known Limitations and Future Work
+================================================================================
+
+
+1. PURPOSE AND SCOPE
+────────────────────
+The simulation models the mechanical response of a road surface (asphalt layer)
+to a passing vehicle and predicts what an embedded MEMS accelerometer (such as
+the ADXL362) mounted inside a smart road reflector would measure.
+
+The primary goals are:
+
+  • Validate the physics of the road-sensor interaction before building hardware.
+  • Calibrate detection thresholds and algorithm parameters for the firmware.
+  • Validate the multi-sensor speed estimation algorithm used by the backend.
+  • Generate labeled training datasets (JSON) for the vehicle classifier.
+
+The simulation covers vehicle types ranging from motorcycles to 5-axle heavy
+trucks and road temperatures from -20 °C to +55 °C.
+
+
+================================================================================
+2. PHYSICAL MODEL
+================================================================================
+
+2.1  ASPHALT LAYER — SINGLE-DEGREE-OF-FREEDOM (SDOF) SYSTEM
+─────────────────────────────────────────────────────────────
+The asphalt layer directly above the sensor is modeled as a single-degree-of-
+freedom (SDOF) mass-spring-damper system:
+
+         F(t)
+          ↓
+    ──────────────
+    |    m_eq    |    ← equivalent mass of asphalt column
+    |            |
+    ╱╲  k_asph  ╱╲   ← asphalt stiffness (in series with subgrade)
+    ──  c_eq   ──    ← viscous damping
+    ╱╲  k_sub  ╱╲   ← subgrade stiffness
+    ──────────────
+         ↓ fixed ground
+
+Equation of motion:
+
+    m_eq · z̈  +  c_eq · ż  +  k_eq · z  =  F(t)
+
+Where:
+    z       = vertical displacement of the asphalt surface [m]
+    z̈      = vertical acceleration of the surface [m/s²]
+    F(t)    = tire force applied to the surface at time t [N]
+    k_eq    = series combination of asphalt and subgrade stiffness [N/m]
+    c_eq    = equivalent viscous damping [N·s/m]
+
+The ODE is solved numerically using the Runge-Kutta RK45 integrator from
+scipy.integrate.solve_ivp with tight tolerances (rtol=1e-7, atol=1e-9).
+
+
+2.2  TEMPERATURE-DEPENDENT ASPHALT MODULUS
+───────────────────────────────────────────
+Asphalt behaves viscoelastically. Its storage modulus E' drops significantly
+as temperature increases:
+
+    Temperature [°C]  |  E' approximate value
+    ──────────────────────────────────────────
+        -20           |  22 GPa  (very stiff, winter)
+        -10           |  16 GPa
+          0           |  10 GPa
+         20           |   4 GPa  (typical summer)
+         40           |   0.9 GPa
+         55           |   0.35 GPa  (very soft, hot pavement)
+
+The model interpolates log10(E') linearly between these reference points. This
+means that at 40 °C the surface is roughly 10× softer than at 0 °C, producing
+much higher accelerations for the same vehicle load.
+
+
+2.3  EQUIVALENT PARAMETERS
+───────────────────────────
+Starting from the asphalt geometry:
+
+    A      = π · R²                           (effective contact area)
+
+    m_eq   = ρ · h · A                        (mass of asphalt column)
+
+    k_asph = E' · A / (h · (1 - ν²))         (asphalt layer stiffness)
+                                              (corrected for Poisson effect)
+
+    k_sub  = K_s · A                          (subgrade modulus → stiffness)
+
+    k_eq   = (k_asph · k_sub) / (k_asph + k_sub)   (series combination)
+
+    c_eq   = 2 · ζ · √(k_eq · m_eq)          (critical damping fraction)
+
+    f_n    = (1 / 2π) · √(k_eq / m_eq)       (natural frequency)
+
+Where:
+    R   = effective influence radius [m]
+    h   = asphalt thickness [m]
+    ρ   = asphalt density [kg/m³]
+    ν   = Poisson ratio (typically 0.35 for asphalt)
+    K_s = subgrade modulus [N/m³]
+    ζ   = viscous damping ratio (typically 0.10–0.25)
+
+
+2.4  VEHICLE LOAD AND TIRE FORCE
+──────────────────────────────────
+The vehicle moves along the x-axis at constant speed. Each axle has two wheels
+(left and right), and the number of axles is configurable.
+
+  Total wheels = num_axles × (2 if opposite_wheels else 1)
+
+Static force per wheel:
+
+    F_static = (M · g) / total_wheels
+
+Dynamic force multiplier (models suspension bounce and road roughness):
+
+    multiplier = 1 + DLR · sin(2π · f_dyn · t)
+
+Where:
+    DLR   = Dynamic Load Ratio (e.g., 0.12 = ±12% variation)
+    f_dyn = Dynamic load frequency [Hz] (typical: 2–15 Hz)
+
+Spatial influence of each wheel on the sensor:
+
+Each wheel contributes a force at the sensor position weighted by a 2D Gaussian
+function of the horizontal distance between the wheel and the sensor:
+
+    w(Δx, Δy) = exp( -(Δx² / 2σx²) - (Δy² / 2σy²) )
+
+Where σx and σy are the influence spread radii. This models the fact that the
+sensor "feels" a wheel most strongly when it is directly overhead, and the
+effect fades with distance.
+
+Total force on the sensor at time t:
+
+    F(t) = Σ_wheels  F_wheel(t) · w(Δx, Δy)
+
+Axle x-positions for a vehicle with n axles and spacing d:
+
+    axle_i_x(t) = x_front(t) - i · d,   i = 0, 1, ..., n-1
+
+
+2.5  SENSOR ARRAY AND NOISE MODEL
+────────────────────────────────────
+Up to 5 sensors can be simulated simultaneously at user-defined x positions
+(e.g., S1 at 0 m, S2 at 4 m, S3 at 8 m).
+
+For each sensor position the vehicle pass is re-simulated with the coordinate
+frame shifted so that the vehicle fully traverses the sensor. All sensors share
+the same simulation duration, so time offsets between sensors are physically
+realistic.
+
+ADXL362 Noise Model:
+
+    σ_noise = noise_density [g/√Hz] × √(f_s / 2)
+
+    Example: 175 µg/√Hz at 1000 Hz → σ = 175e-6 × √500 ≈ 3.9 mg RMS
+
+Gaussian white noise with this standard deviation is added independently to
+each sensor signal. This directly matches the ADXL362 datasheet specification.
+The noise seed is fixed (seed=42) so results are reproducible.
+
+
+2.6  VEHICLE SPEED ESTIMATION (CROSS-CORRELATION)
+───────────────────────────────────────────────────
+When the vehicle passes over two sensors separated by a known distance d [m],
+its vibration signature arrives at S2 later than at S1 by a time lag τ [s].
+
+The lag is found by maximizing the cross-correlation between the two signals:
+
+    C(τ) = Σ_t  s1(t) · s2(t + τ)
+
+The peak of |C(τ)| gives the best-estimate time delay τ_peak.
+
+Estimated speed:
+
+    v_est = d / |τ_peak|     [m/s]
+
+This is the same algorithm that the backend will run on real sensor data. The
+simulation output lets you tune the algorithm parameters (sensor spacing, sample
+rate, noise level) and verify accuracy before deploying hardware.
+
+Typical accuracy: ±5–15% depending on noise level and vehicle signature shape.
+
+
+2.7  EVENT DETECTION (WINDOWED RMS)
+─────────────────────────────────────
+The firmware on the reflector node uses a windowed RMS + threshold algorithm
+to decide whether a vehicle event is occurring.
+
+Step 1 — Compute windowed RMS:
+    RMS(t) = √( mean(x²) over a rolling window of W seconds )
+
+Step 2 — Estimate baseline (background vibration):
+    baseline = 15th percentile of RMS(t)
+
+Step 3 — Threshold:
+    threshold = baseline × multiplier
+
+Step 4 — Event mask:
+    event(t) = True  if RMS(t) > threshold
+
+The 15th percentile baseline is robust to outliers and adapts automatically
+to the ambient vibration level (e.g., high-traffic roads vs. quiet roads).
+
+The simulation shows exactly which time windows would be flagged as vehicle
+events with the current threshold setting, letting you calibrate this value
+before burning it into firmware.
+
+
+2.8  SPECTROGRAM (STFT)
+─────────────────────────
+The spectrogram shows how the frequency content of the S1 signal changes over
+time using the Short-Time Fourier Transform (STFT).
+
+A Hann window with 75% overlap is applied to successive segments of the signal.
+The result is displayed as a color map where:
+
+    X axis = time [s]
+    Y axis = frequency [Hz], limited to 0–100 Hz
+    Color  = power spectral density in dB
+
+This view reveals the characteristic frequency sweep that occurs as the vehicle
+approaches, passes directly over, and recedes from the sensor. It is more
+informative than a single FFT because it shows temporal structure.
+
+
+================================================================================
+3. RUNNING THE SIMULATION
+================================================================================
+
+Requirements:
+    Python 3.9+
+    numpy, pandas, scipy, matplotlib, tkinter (included with Python)
+
+Launch the interactive GUI:
+    python asphalt_vibration_model.py
+
+The simulation runs automatically on startup with default parameters.
+Adjust any control and click "Update Simulation" to recompute.
+
+The scipy RK45 solver with tight tolerances makes each run take roughly
+0.5–3 seconds depending on vehicle speed, duration, and sample rate.
+
+
+================================================================================
+4. GUI CONTROLS REFERENCE
+================================================================================
+
+4.1  ASPHALT SECTION
+─────────────────────
+
+Temperature [°C]
+    Range: -20 to +55 °C
+    The pavement surface temperature. This is the single most impactful
+    parameter: hot asphalt is ~10× softer than cold asphalt, which means
+    much higher surface displacement and acceleration for the same vehicle.
+    Use the temperature corresponding to the actual test conditions.
+
+Thickness [cm]
+    Range: 3 to 20 cm
+    Thickness of the asphalt wearing course above the sensor. Typical roads
+    have 6–12 cm. Thicker layers increase the equivalent mass and reduce
+    stiffness slightly, lowering the natural frequency.
+
+Effective Radius [m]
+    Range: 0.10 to 1.00 m
+    The radius of the circular asphalt area that is modeled as moving together
+    with the sensor. This is an empirical parameter. Smaller values make the
+    system lighter and stiffer (higher natural frequency). A value of 0.30–0.50 m
+    is typical for a single-lane reflector installation.
+
+Damping Ratio ζ
+    Range: 0.01 to 0.60
+    Fraction of critical damping. Asphalt is not a purely elastic material;
+    it absorbs energy through viscous and hysteretic mechanisms.
+    Typical values: 0.10–0.25 for normal asphalt at 20 °C.
+    Higher temperatures increase damping. Higher damping suppresses resonance
+    and reduces peak acceleration.
+
+Subgrade Stiffness [MN/m³]
+    Range: 20 to 300 MN/m³
+    The modulus of reaction of the soil/base layer below the asphalt, also
+    called the Winkler foundation modulus. Typical values:
+        Soft soil (clay)  :  20–60 MN/m³
+        Medium soil       :  60–150 MN/m³
+        Gravel / rock     :  150–300 MN/m³
+    The asphalt and subgrade stiffnesses are in series; the softer one
+    dominates the total equivalent stiffness k_eq.
+
+
+4.2  VEHICLE SECTION
+─────────────────────
+
+Vehicle Mass [kg]
+    Range: 50 to 15,000 kg
+    Total vehicle mass. Reference values:
+        Motorcycle          :  150–350 kg
+        Small car           :  900–1,400 kg
+        SUV / pickup        :  1,600–2,800 kg
+        Delivery truck      :  3,500–7,500 kg
+        Heavy truck / semi  :  10,000–40,000 kg
+
+Speed [km/h]
+    Range: 2 to 120 km/h
+    Vehicle travel speed. This controls how quickly each axle's load pulse
+    sweeps over the sensor. Lower speed = longer pulse duration = more energy
+    deposited. The speed is also what the cross-correlation algorithm will
+    try to recover, so it is the ground-truth reference.
+
+Number of Axles
+    Range: 1 to 8
+    Total number of axles. Combined with "Include opposite-side wheels",
+    this determines the total number of wheel load points:
+        Total wheels = num_axles × (2 if opposite_wheels else 1)
+    Reference values:
+        Motorcycle  : 2 axles, opposite OFF (1 wheel per axle)
+        Car / SUV   : 2 axles, opposite ON  (4 wheels)
+        Delivery    : 2–3 axles, opposite ON
+        Semi-truck  : 5 axles, opposite ON  (10 wheels)
+
+Axle Spacing [m]
+    Range: 0.5 to 8.0 m
+    Uniform distance between consecutive axles. In reality heavy trucks have
+    non-uniform spacing (e.g., close tandem rear axles), but a uniform model
+    is sufficient for class discrimination. Typical values:
+        Car                 : 2.5–2.9 m
+        Light truck         : 3.5–4.5 m
+        Semi-truck (avg)    : 2.0–4.0 m per axle pair
+
+Sensor Lateral Offset [m]
+    Range: 0.0 to 3.0 m
+    Horizontal (cross-lane) distance between the sensor and the nearest wheel
+    path. A value of 0.0 means the sensor is directly in the wheel track.
+    Road reflectors are typically installed on the lane edge marker at
+    0.1–0.5 m from the wheel track. Increasing this value reduces the peak
+    force received by the sensor.
+
+Include opposite-side wheels (checkbox)
+    When checked, wheels on both sides of the vehicle are modeled (left and
+    right). When unchecked, only the near-side wheels are used. For a
+    motorcycle or single-track vehicle, uncheck this option and set
+    Number of Axles = 2.
+
+
+4.3  TIRE LOAD / ROAD EXCITATION SECTION
+──────────────────────────────────────────
+
+Dynamic Load Ratio [%]
+    Range: 0 to 50 %
+    Amplitude of the sinusoidal dynamic load variation as a percentage of
+    the static load. Caused by vehicle suspension oscillation and road
+    surface roughness. A value of 12 % means the tire force oscillates
+    between 88% and 112% of the static value.
+    Typical values: 5–20 % for normal vehicles on smooth roads.
+    Higher values represent damaged suspension or rough road surfaces.
+
+Dynamic Load Frequency [Hz]
+    Range: 1 to 40 Hz
+    Frequency of the dynamic load oscillation. This corresponds to suspension
+    bounce or unsprung mass resonance frequencies:
+        Body bounce (sprung mass)    :  1–3 Hz
+        Wheel hop (unsprung mass)    :  8–15 Hz
+        Road surface waviness        :  varies with speed
+
+Influence Sigma X [m]  (longitudinal spread)
+    Range: 0.05 to 1.50 m
+    Standard deviation of the Gaussian tire influence function along the
+    direction of travel. Larger values mean the sensor "feels" the wheel
+    over a longer stretch of the road (softer transition). This parameter
+    controls the rise and fall time of each load pulse.
+
+Influence Sigma Y [m]  (lateral spread)
+    Range: 0.05 to 1.50 m
+    Standard deviation of the Gaussian tire influence function in the
+    cross-lane direction. Larger values mean the sensor receives significant
+    force even from distant wheels. Should generally be ≤ lane width / 2.
+
+
+4.4  SENSOR ARRAY & DETECTION SECTION
+───────────────────────────────────────
+
+Number of Sensors
+    Range: 2 to 5
+    How many sensor nodes to simulate in the array. In the Alpha Prototype
+    the planned deployment is 3 sensors per lane (S1, S2, S3) at 4 m spacing.
+
+Sensor Spacing [m]
+    Range: 1.0 to 10.0 m
+    Distance between consecutive sensors along the lane. This is the "d"
+    in the speed estimation formula: v = d / τ. Larger spacing gives better
+    speed resolution but requires the signal to be stable over a longer
+    distance. Recommended: 3–6 m for road speeds 20–120 km/h.
+
+Add ADXL362 noise (checkbox)
+    When checked, Gaussian noise is added to each sensor signal independently
+    using the noise density set below. This makes the simulated signals
+    realistically "messy" and lets you test whether detection algorithms
+    still work under real sensor conditions.
+
+Noise Density [µg/√Hz]
+    Range: 50 to 500 µg/√Hz
+    Spectral noise density of the accelerometer. The ADXL362 datasheet
+    specifies 175 µg/√Hz as the typical value. Higher values represent
+    cheaper or lower-quality sensors. The RMS noise at a given sample rate is:
+        σ = noise_density [g/√Hz] × √(sample_rate / 2)
+    At 1000 Hz: σ ≈ 3.9 mg RMS with the ADXL362.
+
+RMS Window [ms]
+    Range: 10 to 500 ms
+    Duration of the rolling window used to compute the windowed RMS for
+    event detection. Shorter windows are more responsive but noisier.
+    Longer windows are smoother but may miss short events (motorcycles).
+    Recommended starting point: 50–150 ms.
+
+Detection Threshold ×
+    Range: 1.5 to 10.0
+    Multiplier applied to the baseline RMS to set the event detection
+    threshold. A value of 3.0 means: flag an event when the windowed RMS
+    exceeds 3× the ambient background level.
+    Lower values → more sensitive (may false-trigger on noise).
+    Higher values → less sensitive (may miss light vehicles).
+    Calibrate by observing the detection panel (bottom-right plot).
+
+Vehicle Class
+    Dropdown: small_vehicle, medium_vehicle, large_vehicle, heavy_vehicle,
+              motorcycle
+    Label applied to exported JSON datasets. Does not affect the simulation
+    physics. Used to tag training data for the backend vehicle classifier.
+
+
+4.5  SENSOR / SIMULATION SECTION
+───────────────────────────────────
+
+Housing Gain
+    Range: 0.1 to 5.0
+    A scalar multiplier applied to the computed surface acceleration to
+    model the mechanical amplification (or attenuation) introduced by
+    the reflector housing. A value of 1.0 means the sensor sees exactly
+    the surface acceleration. Values > 1.0 model resonance of the housing
+    structure. Values < 1.0 model acoustic decoupling or isolation.
+    This parameter must be calibrated from physical measurements.
+
+Sample Rate [Hz]
+    Range: 100 to 3000 Hz
+    The number of acceleration samples per second. Also sets the ODE
+    time step (dt = 1/sample_rate). Higher rates improve accuracy and
+    frequency resolution but increase simulation time.
+    The ADXL362 supports up to 400 Hz in low-power mode and up to
+    3200 Hz in full-power mode.
+    Recommended for this simulation: 800–1000 Hz.
+
+
+4.6  BUTTONS
+─────────────
+
+Update Simulation
+    Recalculates the entire simulation with the current control values.
+    Always click this after changing any parameter to refresh all plots
+    and results. The simulation typically takes 0.5–3 seconds.
+
+Save CSV
+    Exports the S1 reference simulation data (time, force, displacement,
+    velocity, acceleration) to:
+        output/asphalt_vibration_simulation_gui.csv
+    The output/ folder is created automatically if it does not exist.
+
+Export JSON Dataset
+    Exports a labeled multi-sensor dataset to:
+        output/dataset_YYYYMMDD_HHMMSS.json
+    The file contains: vehicle class label, true speed, estimated speed,
+    asphalt temperature, sensor positions, and the complete time-series
+    of acceleration for all sensors. This file can be fed directly to
+    the backend machine learning classifier for training.
+
+Expand All / Collapse All
+    Toggle the visibility of all collapsible control sections to
+    manage screen space.
+
+
+================================================================================
+5. PLOT PANELS REFERENCE
+================================================================================
+
+The plot area is organized as a 3 × 2 grid:
+
+    ┌────────────────────┬────────────────────┐
+    │ (0,0) Tire Load    │ (0,1) Displacement │
+    ├────────────────────┼────────────────────┤
+    │ (1,0) Array Accel  │ (1,1) Clean/Noisy  │
+    ├────────────────────┼────────────────────┤
+    │ (2,0) Spectrogram  │ (2,1) Event Detect │
+    └────────────────────┴────────────────────┘
+
+
+5.1  TOP-LEFT — Tire Load at S1 (reference)
+────────────────────────────────────────────
+    X axis: Time [s]
+    Y axis: Force [N]
+
+    Shows the total tire force F(t) applied to the sensor position as the
+    vehicle passes. The curve is the sum of all wheel Gaussian contributions.
+
+    What to look for:
+    • Number of peaks = number of axles. Each axle produces a distinct
+      force peak as it passes over the sensor.
+    • Peak width = related to vehicle speed and Sigma X. Faster vehicles
+      produce narrower, sharper peaks.
+    • Ripple on each peak = the dynamic load oscillation (DLR).
+    • The force returns to near-zero before and after the pass if the
+      influence radii are small enough.
+
+
+5.2  TOP-RIGHT — Asphalt Displacement at S1
+─────────────────────────────────────────────
+    X axis: Time [s]
+    Y axis: Displacement [mm]
+
+    Shows the vertical displacement z(t) of the asphalt surface computed
+    by the ODE integrator.
+
+    What to look for:
+    • Peak displacement is typically in the range of 0.001–0.5 mm for
+      common vehicles. Larger displacements indicate soft asphalt
+      (high temperature) or heavy vehicles.
+    • Residual oscillation after the vehicle passes indicates under-damping
+      (low ζ). A well-damped system returns to zero quickly.
+    • Multiple peaks corresponding to multiple axles.
+    • Hot pavement (high T) → much larger displacement than cold pavement.
+
+
+5.3  MID-LEFT — Sensor Array Acceleration
+───────────────────────────────────────────
+    X axis: Time [s]
+    Y axis: Acceleration [g]
+    Each sensor has a unique color; legend shows sensor ID and position.
+
+    Shows the noisy accelerometer reading for all sensors in the array
+    overlaid on the same time axis.
+
+    What to look for:
+    • Each sensor shows the same vehicle signature shifted in time. The
+      horizontal offset between the peaks of adjacent sensors is the lag τ
+      used for speed estimation.
+    • With noise enabled, you can visually judge whether the signal peaks
+      are still distinguishable above the noise floor.
+    • For heavy vehicles the peaks are clearly separated. For light
+      vehicles (motorcycle) the peaks may be buried in noise.
+
+
+5.4  MID-RIGHT — S1 Clean vs. Noisy Signal
+────────────────────────────────────────────
+    X axis: Time [s]
+    Y axis: Acceleration [g]
+    Blue line = clean signal (no noise).
+    Red line  = noisy signal (with ADXL362 noise added).
+
+    Direct comparison of the true surface acceleration vs. what the
+    sensor would actually output.
+
+    What to look for:
+    • If the red and blue lines are nearly indistinguishable, the signal-
+      to-noise ratio (SNR) is good; the noise density or threshold
+      multiplier may need to be increased to test realistic conditions.
+    • If the red line is dominated by noise and the peaks are invisible,
+      the SNR is too low for reliable detection. Options: reduce noise
+      density, increase vehicle mass, increase sample rate, or use
+      signal averaging.
+    • Noise level is flat across all frequencies (white noise model).
+
+
+5.5  BOTTOM-LEFT — Spectrogram (STFT)
+───────────────────────────────────────
+    X axis: Time [s]
+    Y axis: Frequency [Hz], 0–100 Hz
+    Color : Power spectral density [dB]  (brighter = more energy)
+
+    The Short-Time Fourier Transform spectrogram of the S1 noisy signal.
+    Unlike a single FFT, this shows how the frequency content changes
+    over time during the vehicle pass.
+
+    What to look for:
+    • The system natural frequency f_n (shown in the Results panel) appears
+      as a bright horizontal band when the system is excited near resonance.
+    • As the vehicle approaches: broadband energy appears.
+    • At peak excitation (vehicle directly over sensor): maximum brightness.
+    • After the vehicle passes: energy fades, resonance may ring down
+      at f_n if damping is low.
+    • The dynamic load frequency appears as a persistent horizontal streak
+      if DLR is significant.
+    • Quiet periods (before/after vehicle) should show only the noise floor.
+
+
+5.6  BOTTOM-RIGHT — Event Detection (Windowed RMS)
+────────────────────────────────────────────────────
+    X axis: Time [s]
+    Y axis: RMS acceleration [g]
+    Blue line  = windowed RMS of S1 signal
+    Red dashed = detection threshold
+    Red shaded = time windows flagged as vehicle event
+
+    Visualization of the event detection algorithm as it would run on
+    the real firmware.
+
+    What to look for:
+    • A well-calibrated detection shows the shaded region covering exactly
+      the time when the vehicle was close to the sensor.
+    • If the shaded region starts too early or ends too late: decrease the
+      threshold multiplier or reduce the RMS window.
+    • If no shading appears for a clearly visible vehicle: increase noise
+      density (to raise the baseline), decrease the threshold multiplier,
+      or use a shorter RMS window.
+    • If background noise triggers false events: increase the multiplier.
+    • The event duration (shown in the Results panel) can be used to
+      estimate vehicle length: length ≈ speed × duration.
+
+
+================================================================================
+6. RESULTS PANEL
+================================================================================
+
+The panel below the buttons updates after every simulation run.
+
+S1 Results
+──────────
+  Peak Force [N]      Maximum tire force seen by sensor S1.
+  Peak Disp. [mm]     Maximum surface vertical displacement.
+  Peak Accel. [g]     Maximum absolute acceleration (including noise if enabled).
+  RMS Accel. [g]      Root-mean-square of the entire S1 signal.
+  Dominant Freq. [Hz] Frequency of the highest FFT bin in the clean S1 signal.
+
+Array
+─────
+  Est. Speed          Speed estimated from the S1→S2 cross-correlation lag.
+                      Shows estimated value in m/s and km/h, and the raw lag in ms.
+                      Compare with the "Speed [km/h]" control for accuracy.
+  Event               Detection result: time range and duration in ms.
+                      "No event detected" appears when the RMS never exceeds
+                      the threshold.
+
+Model
+─────
+  Asphalt E' [GPa]    Storage modulus at the current temperature.
+  Natural Freq. [Hz]  SDOF natural frequency f_n = (1/2π)√(k_eq/m_eq).
+  k_eq [N/m]          Equivalent stiffness (series of asphalt + subgrade).
+  c_eq [N·s/m]        Equivalent viscous damping coefficient.
+
+
+================================================================================
+7. EXPORT FUNCTIONS
+================================================================================
+
+7.1  SAVE CSV
+──────────────
+Output: output/asphalt_vibration_simulation_gui.csv
+
+Columns:
+    time_s           Simulation time [s]
+    force_n          Tire force at sensor [N]
+    displacement_m   Surface vertical displacement [m]
+    displacement_mm  Surface vertical displacement [mm]
+    velocity_m_s     Surface vertical velocity [m/s]
+    acceleration_m_s2 Surface acceleration [m/s²]
+    acceleration_g   Surface acceleration [g]
+
+This file contains only the S1 reference simulation (no noise).
+Useful for plotting in external tools or comparing with measured data.
+
+
+7.2  EXPORT JSON DATASET
+─────────────────────────
+Output: output/dataset_YYYYMMDD_HHMMSS.json
+
+Schema:
+    generated_at          ISO 8601 UTC timestamp
+    vehicle_class         Label from the Vehicle Class dropdown
+    vehicle_mass_kg       Vehicle mass [kg]
+    num_axles             Number of axles
+    speed_true_m_s        Ground truth speed [m/s]
+    speed_true_kmh        Ground truth speed [km/h]
+    speed_estimated_m_s   Speed estimated by cross-correlation [m/s]
+    asphalt_temperature_c Pavement temperature [°C]
+    sensors[]             List of { sensor_id, x_m } for each sensor
+    samples[]             List of { sensor_id, time_s, acceleration_g, force_n }
+
+Use this file to build training datasets for the backend vehicle classifier.
+Generate one file per vehicle configuration and label combination. Multiple
+files can be concatenated or fed to a batch training script.
+
+
+================================================================================
+8. TYPICAL USAGE WORKFLOWS
+================================================================================
+
+WORKFLOW A — Calibrate detection threshold for a specific road and sensor
+──────────────────────────────────────────────────────────────────────────
+  1. Set Temperature and Subgrade Stiffness to match the target road.
+  2. Set Vehicle Mass, Speed, and Axles for the target vehicle class.
+  3. Enable noise and set Noise Density to 175 µg/√Hz (ADXL362 default).
+  4. Adjust "Detection Threshold ×" until the shaded event region in the
+     bottom-right plot covers exactly the vehicle pass time.
+  5. Note the threshold value — use it as the initial firmware parameter.
+  6. Repeat with a lighter vehicle (motorcycle) to ensure the threshold
+     does not miss it.
+
+WORKFLOW B — Validate speed estimation accuracy
+────────────────────────────────────────────────
+  1. Set Number of Sensors = 3, Sensor Spacing = 4.0 m.
+  2. Set vehicle speed to a known value (e.g., 60 km/h = 16.67 m/s).
+  3. Enable noise at 175 µg/√Hz.
+  4. Run simulation and check "Est. Speed" in the Results panel.
+  5. Try different noise levels, vehicle masses, and speeds to map the
+     accuracy of the cross-correlation estimator.
+  6. The accuracy should be ±5–15% under typical conditions.
+
+WORKFLOW C — Generate a training dataset
+──────────────────────────────────────────
+  1. Choose a vehicle configuration (e.g., heavy_vehicle: 18000 kg, 3 axles).
+  2. Set a realistic temperature range and run for several temperatures.
+  3. After each run, click "Export JSON Dataset".
+  4. Change the Vehicle Class label and repeat for each class.
+  5. Vary speed and mass within each class to create diversity.
+  6. Use the generated JSON files to train the backend classifier.
+
+WORKFLOW D — Inspect resonance behavior
+─────────────────────────────────────────
+  1. Set Damping Ratio ζ = 0.05 (lightly damped).
+  2. Set a slow vehicle speed (5 km/h) to deliver a slow-moving load.
+  3. Observe the displacement plot: residual oscillation at f_n after the pass.
+  4. Check the spectrogram for the resonant frequency band.
+  5. Gradually increase ζ and observe how the ringing decreases.
+
+
+================================================================================
+9. KNOWN LIMITATIONS AND FUTURE WORK
+================================================================================
+
+Current limitations:
+
+  1. SDOF model
+     The asphalt is modeled as a single degree of freedom. A more accurate
+     model would use a layered elastic half-space (Boussinesq or FEM), but
+     this is computationally too expensive for real-time interactive use.
+
+  2. Flat road profile (no ISO 8608 roughness)
+     The road surface is assumed perfectly flat. Real roads have stochastic
+     roughness described by ISO 8608 classes A–H. Adding random roughness
+     would make background vibration levels more realistic and improve
+     detection threshold calibration.
+
+  3. No quarter-car vehicle dynamics
+     The vehicle suspension is approximated by the dynamic load multiplier
+     (DLR). A proper quarter-car model with sprung/unsprung mass and tire
+     stiffness would produce more accurate force time histories, especially
+     the secondary suspension bounce peak at 1–3 Hz.
+
+  4. Uniform axle load distribution
+     All axles carry equal load. Real heavy trucks have unequal axle loads
+     (front axle typically carries less than rear tandem axles).
+
+  5. 2D influence model
+     The Gaussian influence function assumes the sensor is at y = 0. The
+     vehicle lateral position is fixed; lane weaving is not modeled.
+
+  6. Constant speed
+     Vehicle acceleration and deceleration are not modeled.
+
+  7. No temperature gradient
+     Temperature is uniform through the asphalt layer; in reality the top
+     surface is hotter than the bottom on a sunny day.
+
+Planned improvements:
+
+  • ISO 8608 random road roughness generator
+  • Quarter-car (2-DOF) vehicle model
+  • Per-axle load distribution profile
+  • Batch simulation mode for dataset generation without GUI
+  • Live comparison with real sensor data from CSV import
+
+================================================================================
+END OF DOCUMENT
+================================================================================
